@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Cinematic 3D Sound — Fixed Playback</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #05050a;
+        color: #eee;
+        font-family: Inter, system-ui, Segoe UI, Roboto, Arial;
+      }
+      canvas {
+        display: block;
+      }
+      #ui {
+        position: fixed;
+        left: 18px;
+        top: 18px;
+        z-index: 120;
+        background: rgba(12, 12, 18, 0.56);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(10px) saturate(140%);
+        padding: 12px;
+        border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+        max-width: 420px;
+      }
+      #ui .small {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .btn {
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+      }
+      .accent {
+        background: linear-gradient(90deg, #7b61ff, #00f5a0);
+        color: #021;
+        font-weight: 700;
+      }
+      #statusOverlay {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        background: rgba(0, 0, 0, 0.45);
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        font-family: monospace;
+        z-index: 120;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <div style="display: flex; justify-content: space-between; align-items: center">
+        <div>
+          <div style="font-weight: 700; font-size: 16px">Cinematic 3D Sound</div>
+          <div class="small">Line synced to music • bloom • particles • DOF</div>
+        </div>
+        <div style="text-align: right">
+          <div
+            class="small"
+            style="
+              background: linear-gradient(90deg, #00f5a0, #7b61ff);
+              padding: 6px 10px;
+              border-radius: 999px;
+              color: #021;
+              font-weight: 700;
+            "
+          >
+            musicq
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center">
+        <input
+          id="file"
+          type="file"
+          accept="audio/*"
+          style="
+            flex: 1;
+            padding: 6px;
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+          "
+        />
+        <button id="animateBtn" class="btn accent">Animate & Play</button>
+      </div>
+
+      <div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+        <label class="small">X</label>
+        <input id="xScale" type="range" min="0.2" max="2.2" step="0.01" value="1" />
+        <label class="small">Y</label>
+        <input id="yScale" type="range" min="0.2" max="2.2" step="0.01" value="1" />
+        <label class="small">Z</label>
+        <input id="zScale" type="range" min="0.2" max="2.2" step="0.01" value="1" />
+      </div>
+
+      <div
+        style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center"
+      >
+        <div class="small" id="statusFile">Waiting for audio</div>
+        <div class="small" id="statusProcessing">—</div>
+      </div>
+    </div>
+
+    <div id="statusOverlay" class="small">Ready</div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.module.js",
+          "three/": "https://cdn.jsdelivr.net/npm/three@0.155.0/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/controls/OrbitControls.js';
+      import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/EffectComposer.js';
+      import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/RenderPass.js';
+      import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+      import { AfterimagePass } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/AfterimagePass.js';
+      import { FilmPass } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/FilmPass.js';
+      import { BokehPass } from 'https://cdn.jsdelivr.net/npm/three@0.155.0/examples/jsm/postprocessing/BokehPass.js';
+
+      // scene + renderer
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x05050a);
+      scene.fog = new THREE.FogExp2(0x050512, 0.03);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      document.body.appendChild(renderer.domElement);
+
+      // camera + controls
+      const camera = new THREE.PerspectiveCamera(
+        48,
+        window.innerWidth / window.innerHeight,
+        0.05,
+        400
+      );
+      camera.position.set(0, 1.6, 4.4);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.07;
+      controls.maxPolarAngle = Math.PI * 0.48;
+
+      // composer + effects
+      const composer = new EffectComposer(renderer);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      composer.addPass(new RenderPass(scene, camera));
+      const bloom = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.9,
+        0.25,
+        0.12
+      );
+      bloom.threshold = 0.12;
+      bloom.strength = 0.9;
+      bloom.radius = 0.2;
+      composer.addPass(bloom);
+      composer.addPass(new AfterimagePass(0.7));
+      composer.addPass(new FilmPass(0.13, 0.002, 648, false));
+      const bokeh = new BokehPass(scene, camera, { focus: 1.6, aperture: 0.00025, maxblur: 0.012 });
+      composer.addPass(bokeh);
+
+      // lights + sky + stars
+      const hemi = new THREE.HemisphereLight(0x88ccff, 0x081020, 0.7);
+      scene.add(hemi);
+      const key = new THREE.SpotLight(0xff77cc, 2.2, 40, Math.PI / 6, 0.2, 1);
+      key.position.set(2.2, 3.8, 2.6);
+      scene.add(key);
+      const rim = new THREE.DirectionalLight(0x3ab3ff, 0.35);
+      rim.position.set(-3, 1.6, -2.8);
+      scene.add(rim);
+      const skyGeo = new THREE.SphereGeometry(180, 32, 24);
+      const skyMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        uniforms: {
+          topColor: { value: new THREE.Color(0x0b0930) },
+          bottomColor: { value: new THREE.Color(0x090012) },
+          offset: { value: 30 },
+          exponent: { value: 0.6 },
+        },
+        vertexShader: `varying vec3 vWorldPosition;void main(){vec4 worldPosition=modelMatrix*vec4(position,1.0);vWorldPosition=worldPosition.xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+        fragmentShader: `varying vec3 vWorldPosition;uniform vec3 topColor;uniform vec3 bottomColor;uniform float offset;uniform float exponent;void main(){float h=normalize(vWorldPosition+offset).y;gl_FragColor=vec4(mix(bottomColor,topColor,max(pow(max(h,0.0),exponent),0.0)),1.0);}`,
+      });
+      const sky = new THREE.Mesh(skyGeo, skyMat);
+      scene.add(sky);
+      const starCount = 700;
+      const starPos = new Float32Array(starCount * 3);
+      for (let i = 0; i < starCount * 3; i++) starPos[i] = (Math.random() - 0.5) * 80;
+      const starGeo = new THREE.BufferGeometry();
+      starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+      const starMat = new THREE.PointsMaterial({
+        size: 0.04,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+      });
+      const stars = new THREE.Points(starGeo, starMat);
+      scene.add(stars);
+
+      // line geom
+      const MAX_POINTS = 18000;
+      const positions = new Float32Array(MAX_POINTS * 3);
+      const colors = new Float32Array(MAX_POINTS * 3);
+      let drawIndex = 0;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute(
+        'position',
+        new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
+      );
+      geom.setAttribute(
+        'color',
+        new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage)
+      );
+      geom.setDrawRange(0, 0);
+      const lineMat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        linewidth: 2,
+        opacity: 0.92,
+      });
+      const line = new THREE.Line(geom, lineMat);
+      scene.add(line);
+
+      // particle pool
+      const P_MAX = 1400;
+      const pPos = new Float32Array(P_MAX * 3);
+      const pAlpha = new Float32Array(P_MAX);
+      const pBorn = new Float32Array(P_MAX);
+      const pLife = new Float32Array(P_MAX);
+      const pVel = new Float32Array(P_MAX * 3);
+      const pGeom = new THREE.BufferGeometry();
+      pGeom.setAttribute(
+        'position',
+        new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage)
+      );
+      pGeom.setAttribute(
+        'aAlpha',
+        new THREE.BufferAttribute(pAlpha, 1).setUsage(THREE.DynamicDrawUsage)
+      );
+      const pMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: { uColor: { value: new THREE.Color(0xffb86b) } },
+        vertexShader: `attribute float aAlpha;varying float vAlpha;void main(){vAlpha=aAlpha;vec4 mv=modelViewMatrix*vec4(position,1.0);gl_PointSize=(6.0+vAlpha*6.0)*(300.0/ - mv.z);gl_Position=projectionMatrix*mv;}`,
+        fragmentShader: `uniform vec3 uColor;varying float vAlpha;void main(){float d=length(gl_PointCoord-vec2(0.5));float a=smoothstep(0.6,0.0,d)*vAlpha; if(a<0.01) discard; gl_FragColor=vec4(uColor,a);}`,
+      });
+      const particles = new THREE.Points(pGeom, pMat);
+      scene.add(particles);
+
+      function spawnParticles(x, y, z, count = 20, str = 1.0) {
+        const now = performance.now();
+        for (let i = 0; i < count; i++) {
+          const idx = (Math.random() * P_MAX) | 0;
+          pPos[idx * 3] = x + (Math.random() - 0.5) * 0.6 * str;
+          pPos[idx * 3 + 1] = y + Math.random() * 0.6 * str;
+          pPos[idx * 3 + 2] = z + (Math.random() - 0.5) * 0.6 * str;
+          pAlpha[idx] = 1;
+          pBorn[idx] = now;
+          pLife[idx] = 420 + Math.random() * 640;
+          pVel[idx * 3] = (Math.random() - 0.5) * 1.2 * str;
+          pVel[idx * 3 + 1] = 0.3 + Math.random() * 1.1 * str;
+          pVel[idx * 3 + 2] = (Math.random() - 0.5) * 1.2 * str;
+        }
+        pGeom.attributes.position.needsUpdate = true;
+        pGeom.attributes.aAlpha.needsUpdate = true;
+      }
+
+      function freqToColor(freqHz) {
+        const t = Math.min(1, (freqHz || 3000) / 8000);
+        const r = Math.max(0, Math.min(1, (t - 0.5) * 2));
+        const g = 1 - Math.abs(t - 0.5) * 2;
+        const b = Math.max(0, Math.min(1, (0.5 - t) * 2));
+        return [r, g, b];
+      }
+
+      // audio variables and DOM
+      let audioCtx = null,
+        currentAudioBuffer = null,
+        playbackSource = null,
+        playbackStartTime = 0,
+        secPerHop = 0;
+      let isPlaying = false;
+      let liveAnalyser = null,
+        liveWaveData = null;
+      const fileInput = document.getElementById('file');
+      const statusFile = document.getElementById('statusFile');
+      const statusProcessing = document.getElementById('statusProcessing');
+      const statusOverlay = document.getElementById('statusOverlay');
+      const xScaleEl = document.getElementById('xScale');
+      const yScaleEl = document.getElementById('yScale');
+      const zScaleEl = document.getElementById('zScale');
+      const animateBtn = document.getElementById('animateBtn');
+
+      // FFT
+      function computeSpectrum(frame) {
+        const N = frame.length;
+        if ((N & (N - 1)) !== 0) throw new Error('FFT size must be power of two');
+        const real = new Float32Array(N),
+          imag = new Float32Array(N);
+        for (let i = 0; i < N; i++) real[i] = frame[i] || 0;
+        let j = 0;
+        for (let i = 1; i < N; i++) {
+          let bit = N >> 1;
+          for (; j & bit; bit >>= 1) j ^= bit;
+          j ^= bit;
+          if (i < j) {
+            const tr = real[i];
+            real[i] = real[j];
+            real[j] = tr;
+            const ti = imag[i];
+            imag[i] = imag[j];
+            imag[j] = ti;
+          }
+        }
+        for (let len = 2; len <= N; len <<= 1) {
+          const ang = (-2 * Math.PI) / len;
+          const wlenRe = Math.cos(ang),
+            wlenIm = Math.sin(ang);
+          for (let i = 0; i < N; i += len) {
+            let wRe = 1,
+              wIm = 0;
+            const half = len >> 1;
+            for (let k = 0; k < half; k++) {
+              const uRe = real[i + k],
+                uIm = imag[i + k];
+              const vRe = real[i + k + half] * wRe - imag[i + k + half] * wIm;
+              const vIm = real[i + k + half] * wIm + imag[i + k + half] * wRe;
+              real[i + k] = uRe + vRe;
+              imag[i + k] = uIm + vIm;
+              real[i + k + half] = uRe - vRe;
+              imag[i + k + half] = uIm - vIm;
+              const nextRe = wRe * wlenRe - wIm * wlenIm;
+              wIm = wRe * wlenIm + wIm * wlenRe;
+              wRe = nextRe;
+            }
+          }
+        }
+        const mags = new Float32Array(N / 2);
+        for (let k = 0; k < N / 2; k++) {
+          const re = real[k],
+            im = imag[k];
+          mags[k] = Math.hypot(re, im);
+        }
+        return mags;
+      }
+      function spectralCentroidFromMags(mags, sampleRate) {
+        let num = 0,
+          den = 1e-9;
+        for (let k = 0; k < mags.length; k++) {
+          const f = k * (sampleRate / (mags.length * 2));
+          const m = mags[k];
+          num += f * m;
+          den += m;
+        }
+        return num / den;
+      }
+
+      // process file -> build positions and set secPerHop
+      fileInput.addEventListener('change', async (ev) => {
+        const f = ev.target.files[0];
+        if (!f) return;
+        statusFile.textContent = f.name;
+        statusOverlay.textContent = 'Decoding...';
+        const arrayBuffer = await f.arrayBuffer();
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        currentAudioBuffer = audioBuffer;
+        statusProcessing.textContent = audioBuffer.duration.toFixed(2) + ' s';
+
+        const sampleRate = audioBuffer.sampleRate;
+        const frameSize = 2048;
+        const hopSize = 512;
+        secPerHop = hopSize / sampleRate;
+        const channelData = audioBuffer.getChannelData(0);
+        const nFrames = Math.max(0, Math.floor((channelData.length - frameSize) / hopSize));
+
+        drawIndex = 0;
+        geom.setDrawRange(0, 0);
+
+        let tSec = 0;
+        const processStart = performance.now();
+        const N_BANDS = 64;
+
+        for (let i = 0; i < nFrames && drawIndex < MAX_POINTS; i++) {
+          const start = i * hopSize;
+          const frame = new Float32Array(frameSize);
+          for (let j = 0; j < frameSize; j++) frame[j] = channelData[start + j] || 0;
+          let sumSq = 0;
+          for (let j = 0; j < frame.length; j++) sumSq += frame[j] * frame[j];
+          const rms = Math.sqrt(sumSq / frame.length);
+          const mags = computeSpectrum(frame);
+          const centroid = spectralCentroidFromMags(mags, sampleRate);
+          const bandSize = Math.max(1, Math.floor(mags.length / N_BANDS));
+          // band energy stored if needed later
+          for (let b = 0; b < N_BANDS; b++) {
+            let s = 0;
+            const startBin = b * bandSize;
+            const endBin = Math.min(mags.length, startBin + bandSize);
+            for (let bb = startBin; bb < endBin; bb++) s += mags[bb] || 0;
+          }
+          const x = tSec;
+          const y = rms * 3;
+          const z = (centroid / 8000 - 0.5) * 4;
+          positions[drawIndex * 3 + 0] = x;
+          positions[drawIndex * 3 + 1] = y;
+          positions[drawIndex * 3 + 2] = z;
+          const [r, g, b] = freqToColor(centroid || rms * 8000);
+          colors[drawIndex * 3 + 0] = r;
+          colors[drawIndex * 3 + 1] = g;
+          colors[drawIndex * 3 + 2] = b;
+          drawIndex++;
+          tSec += secPerHop;
+        }
+
+        if (drawIndex > 1) {
+          const centerX = (positions[0] + positions[(drawIndex - 1) * 3]) / 2;
+          for (let i = 0; i < drawIndex; i++) positions[i * 3 + 0] -= centerX;
+        }
+
+        geom.attributes.position.needsUpdate = true;
+        geom.attributes.color.needsUpdate = true;
+        geom.setDrawRange(0, drawIndex);
+
+        statusOverlay.textContent = 'Processed';
+        statusProcessing.textContent = drawIndex + ' pts';
+
+        // keep a copy for transforms
+        window.__basePositions = positions.slice(0, drawIndex * 3);
+      });
+
+      // safe startPlayback that resumes audioCtx and ensures connections
+      async function startPlayback() {
+        if (!currentAudioBuffer) {
+          statusOverlay.textContent = 'No audio loaded';
+          return false;
+        }
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // stop previous
+        if (playbackSource) {
+          try {
+            playbackSource.stop();
+          } catch (_) {}
+          try {
+            playbackSource.disconnect();
+          } catch (_) {}
+          playbackSource = null;
+        }
+
+        playbackSource = audioCtx.createBufferSource();
+        playbackSource.buffer = currentAudioBuffer;
+
+        // create live analyser if possible
+        try {
+          if (!liveAnalyser) {
+            liveAnalyser = audioCtx.createAnalyser();
+            liveAnalyser.fftSize = 1024;
+            liveWaveData = new Uint8Array(liveAnalyser.frequencyBinCount);
+          }
+          playbackSource.connect(liveAnalyser);
+          liveAnalyser.connect(audioCtx.destination);
+        } catch (e) {
+          // fallback: connect directly
+          try {
+            playbackSource.connect(audioCtx.destination);
+          } catch (err) {}
+          liveAnalyser = null;
+        }
+
+        // browsers require a user gesture to resume the audio context — await it
+        try {
+          if (audioCtx.state === 'suspended') {
+            await audioCtx.resume(); // this MUST be called within a user gesture to succeed
+          }
+        } catch (e) {
+          // ignore; continue attempting to start
+        }
+
+        const scheduleOffset = 0.04;
+        playbackStartTime = audioCtx.currentTime + scheduleOffset;
+        try {
+          playbackSource.start(playbackStartTime);
+          isPlaying = true;
+          statusOverlay.textContent = 'Playing';
+        } catch (err) {
+          // if scheduling failed, connect and try immediate start (fallback)
+          try {
+            playbackSource.disconnect();
+            playbackSource.connect(audioCtx.destination);
+            playbackSource.start();
+            playbackStartTime = audioCtx.currentTime;
+            isPlaying = true;
+            statusOverlay.textContent = 'Playing (fallback)';
+          } catch (e2) {
+            statusOverlay.textContent = 'Playback failed: ' + (e2 && e2.message ? e2.message : e2);
+            isPlaying = false;
+            return false;
+          }
+        }
+
+        playbackSource.onended = () => {
+          isPlaying = false;
+          statusOverlay.textContent = 'Playback finished';
+        };
+        return true;
+      }
+
+      // animate button: run transform preview + startPlayback (only if file loaded)
+      animateBtn.addEventListener('click', async () => {
+        if (!currentAudioBuffer) {
+          statusOverlay.textContent = 'Load an audio file first';
+          return;
+        }
+        // small entrance: reveal a tiny head to start
+        geom.setDrawRange(0, Math.min(3, drawIndex));
+        // small camera move for drama
+        camera.position.set(0, 1.6, 5.2);
+        // resume + start audio (await ensures user gesture triggered resume executes)
+        const ok = await startPlayback();
+        if (!ok) {
+          statusOverlay.textContent = 'Playback failed — check console';
+          return;
+        }
+        // user requested playback so reset prevShown so sync begins clean
+        prevShown = 0;
+        statusOverlay.textContent = 'Animating & playing';
+      });
+
+      // transforms from sliders
+      function computeTransformed(src, n, sx, sy, sz, vo = 0.02) {
+        if (!src || !n) return null;
+        const out = new Float32Array(n * 3);
+        let minY = Infinity;
+        for (let i = 0; i < n; i++) minY = Math.min(minY, src[i * 3 + 1]);
+        const centerX = (src[0] + src[(n - 1) * 3]) / 2;
+        for (let i = 0; i < n; i++) {
+          const xi = src[i * 3 + 0],
+            yi = src[i * 3 + 1],
+            zi = src[i * 3 + 2];
+          out[i * 3 + 0] = (xi - centerX) * sx;
+          out[i * 3 + 1] = (yi - minY) * sy + vo;
+          out[i * 3 + 2] = zi * sz;
+        }
+        return out;
+      }
+      xScaleEl.addEventListener('input', applyPreviewTransform);
+      yScaleEl.addEventListener('input', applyPreviewTransform);
+      zScaleEl.addEventListener('input', applyPreviewTransform);
+      function applyPreviewTransform() {
+        const base = window.__basePositions;
+        if (!base) return;
+        const n = Math.floor(base.length / 3);
+        const sx = parseFloat(xScaleEl.value),
+          sy = parseFloat(yScaleEl.value),
+          sz = parseFloat(zScaleEl.value);
+        const t = computeTransformed(base, n, sx, sy, sz);
+        if (!t) return;
+        for (let i = 0; i < n * 3; i++) positions[i] = t[i];
+        geom.attributes.position.needsUpdate = true;
+      }
+
+      // main animate loop (sync to audio via secPerHop)
+      let prevShown = 0;
+      function animate() {
+        controls.update();
+
+        if (isPlaying && audioCtx && secPerHop > 0) {
+          const elapsed = audioCtx.currentTime - playbackStartTime;
+          let shownFrames = Math.max(0, Math.floor(elapsed / secPerHop));
+          const shown = Math.min(drawIndex, shownFrames);
+          geom.setDrawRange(0, shown);
+
+          if (shown > prevShown) {
+            const idx = Math.max(0, shown - 1);
+            const amp = positions[idx * 3 + 1] || 0;
+            const ampPrev = positions[Math.max(0, idx - 1) * 3 + 1] || 0;
+            const delta = amp - ampPrev;
+            if (delta > 0.02) {
+              spawnParticles(
+                positions[idx * 3 + 0],
+                positions[idx * 3 + 1],
+                positions[idx * 3 + 2],
+                18,
+                Math.min(2, delta * 40)
+              );
+              statusOverlay.style.transform = 'scale(1.03)';
+              setTimeout(() => (statusOverlay.style.transform = ''), 110);
+            }
+            prevShown = shown;
+          }
+
+          if (currentAudioBuffer && elapsed >= currentAudioBuffer.duration) {
+            isPlaying = false;
+            try {
+              playbackSource.stop();
+            } catch (e) {}
+            statusOverlay.textContent = 'Playback finished';
+          }
+        }
+
+        // particles
+        const now = performance.now();
+        let anyActive = false;
+        for (let i = 0; i < P_MAX; i++) {
+          const born = pBorn[i];
+          if (!born) continue;
+          const age = now - born;
+          const life = pLife[i] || 1;
+          const t = Math.max(0, 1 - age / life);
+          pAlpha[i] = t;
+          pPos[i * 3 + 0] += pVel[i * 3 + 0] * 0.016;
+          pPos[i * 3 + 1] += pVel[i * 3 + 1] * 0.016;
+          pPos[i * 3 + 2] += pVel[i * 3 + 2] * 0.016;
+          pVel[i * 3 + 1] -= 0.9 * 0.016;
+          anyActive = true;
+          if (age >= life) {
+            pBorn[i] = 0;
+            pAlpha[i] = 0;
+          }
+        }
+        if (anyActive) {
+          pGeom.attributes.position.needsUpdate = true;
+          pGeom.attributes.aAlpha.needsUpdate = true;
+        }
+
+        stars.rotation.y += 0.0006;
+        sky.material.uniforms.offset.value = 30 + Math.sin(now * 0.0002) * 2;
+
+        composer.render();
+        requestAnimationFrame(animate);
+      }
+      animate();
+
+      // responsive
+      window.addEventListener('resize', () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+      });
+
+      window.__viz = { scene, camera, renderer, composer };
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  </body>
+</html>

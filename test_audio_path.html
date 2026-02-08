@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Audio Test</title>
+</head>
+
+<body>
+    <h1>Audio Path Test</h1>
+    <button id="testBtn">Test Load Audio</button>
+    <div id="status">Click button to test</div>
+
+    <script>
+        document.getElementById('testBtn').addEventListener('click', async () => {
+            const status = document.getElementById('status');
+            status.textContent = 'Loading...';
+
+            try {
+                const response = await fetch('audio/games-worldbeat-466.mp3');
+                if (response.ok) {
+                    status.textContent = '✅ SUCCESS! Audio file found at: audio/games-worldbeat-466.mp3';
+                    status.style.color = 'green';
+
+                    // Try to decode it
+                    const arrayBuffer = await response.arrayBuffer();
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    status.textContent += `\n✅ Audio decoded successfully! Duration: ${audioBuffer.duration.toFixed(2)}s`;
+                } else {
+                    status.textContent = '❌ FAILED! File not found. Status: ' + response.status;
+                    status.style.color = 'red';
+                }
+            } catch (err) {
+                status.textContent = '❌ ERROR: ' + err.message;
+                status.style.color = 'red';
+            }
+        });
+    </script>
+</body>
+
+</html>
